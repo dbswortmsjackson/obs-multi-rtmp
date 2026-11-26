@@ -1,0 +1,77 @@
+name: Build Customized OBS Multi-RTMP (Windows x64)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Build OBS Multi-RTMP 0.7.4.5 (custom UI)
+    runs-on: windows-2022
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Extract customized source archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:GITHUB_WORKSPACE 'obs-multi-rtmp-0.7.4.5-ui-custom-v0.1.1-full-source.zip'
+          if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
+            throw "Source archive not found: $archive"
+          }
+
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'obs-multi-rtmp-ui-custom'
+          if (Test-Path -LiteralPath $extractRoot) {
+            Remove-Item -LiteralPath $extractRoot -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
+          Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot -Force
+
+          $sourceRoot = Join-Path $extractRoot 'obs-multi-rtmp-0.7.4.5'
+          if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot 'CMakeLists.txt') -PathType Leaf)) {
+            throw "Expected source folder was not found inside archive: $sourceRoot"
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot '.github/scripts/Build-Windows.ps1') -PathType Leaf)) {
+            throw 'Windows build script is missing from the source archive.'
+          }
+
+          "CUSTOM_SOURCE_ROOT=$sourceRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build plugin
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & (Join-Path $env:CUSTOM_SOURCE_ROOT '.github/scripts/Build-Windows.ps1') -Target x64 -Configuration RelWithDebInfo
+          if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
+            throw "Build script returned exit code $LASTEXITCODE"
+          }
+
+      - name: Package ZIP and Windows installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & (Join-Path $env:CUSTOM_SOURCE_ROOT '.github/scripts/Package-Windows.ps1') -Target x64 -Configuration RelWithDebInfo
+          if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
+            throw "Package script returned exit code $LASTEXITCODE"
+          }
+
+      - name: Verify package outputs
+        shell: pwsh
+        run: |
+          $release = Join-Path $env:CUSTOM_SOURCE_ROOT 'release'
+          $zip = Join-Path $release 'obs-multi-rtmp-0.7.4.5-windows-x64.zip'
+          $installer = Join-Path $release 'obs-multi-rtmp-0.7.4.5-windows-x64-Installer.exe'
+          if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) { throw "Missing package: $zip" }
+          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw "Missing installer: $installer" }
+
+      - name: Upload installable files
+        uses: actions/upload-artifact@v4
+        with:
+          name: obs-multi-rtmp-0.7.4.5-ui-custom-v0.1.1-windows-x64
+          path: |
+            ${{ runner.temp }}/obs-multi-rtmp-ui-custom/obs-multi-rtmp-0.7.4.5/release/obs-multi-rtmp-0.7.4.5-windows-x64.zip
+            ${{ runner.temp }}/obs-multi-rtmp-ui-custom/obs-multi-rtmp-0.7.4.5/release/obs-multi-rtmp-0.7.4.5-windows-x64-Installer.exe
+          if-no-files-found: error
